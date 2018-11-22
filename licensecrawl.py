@@ -9,7 +9,6 @@ import sys
 import re
 import time
 
-
 def python(path):
     requirements = glob.glob(path + "/**/requirements.txt", recursive=True)
     for r in requirements:
@@ -25,19 +24,20 @@ def python(path):
                 continue
 
             url = "https://pypi.org/pypi/"+l.split("==")[0]+"/json"
+            package = l.strip()
             try:
                 with urllib.request.urlopen(url) as url:
                     data = json.loads(url.read().decode())
                     license = data["info"]["license"]
-                    print(path, "package:", l.strip(), license)
+                    yield (path, package, license)
             except urllib.error.HTTPError as e:
                 print(url, e)
 
 
 def github(repo_url):
     parts = repo_url.split("/")[1:]
-    url = ("http://api.github.com/repos/{}/{}/license?access_token={access_token}".format(*
-                                                                                          parts, access_token=os.environ["GITHUB_API_TOKEN"]))
+    url_tmpl = "http://api.github.com/repos/{}/{}/license?access_token={access_token}"
+    url = url_tmpl.format(*parts, access_token=os.environ["GITHUB_API_TOKEN"])
     try:
         with urllib.request.urlopen(url) as url:
             data = json.loads(url.read().decode())
@@ -54,7 +54,7 @@ def gomod(path):
             if l.strip().startswith("github"):
                 package = l.strip().split()[0]
                 license = github(package)
-                print(path, package, license)
+                yield (path, package, license)
 
 
 def glide(path):
@@ -64,8 +64,9 @@ def glide(path):
             if not "package:" in l:
                 continue
             package = l.split(":")[1].strip()
-            license = github(package)
-            print(path, package, license)
+            if "github" in package:
+                license = github(package)
+                yield (path, package, license)
 
 
 def cocoa(path):
@@ -78,18 +79,22 @@ def cocoa(path):
                     package)
                 req = urllib.request.Request(
                     url,
-                    data=None,
                     headers={
                         'User-Agent': 'licensecrawl'
                     }
                 )
-
                 try:
                     with urllib.request.urlopen(req) as response:
                         data = json.loads(response.read().decode())
-                        print(package, data["cocoadocs"]["license_short_name"])
+                        yield(path, package, data["cocoadocs"]["license_short_name"])
                 except Exception as e:
                     print(e.reason)
+
+def get(url):
+    req = urllib.request.Request(url,
+        headers={'User-Agent': 'licensecrawler'}
+    )
+    return urllib.request.urlopen(req).read()
 
 
 def gradle(path):
@@ -101,10 +106,7 @@ def gradle(path):
             if "compileSdkVersion" in l:
                 continue 
             if "implementation" in l or "compile" in l:
-                # print(l)
-                print(l)
                 package = re.split("[( ]", l.strip())[1].strip("\'\)\"")
-
                 if package == "fileTree":
                     continue
                 package = package.split("@")[0]
@@ -117,7 +119,6 @@ def gradle(path):
 
                 req = urllib.request.Request(
                     url,
-                    data=None,
                     headers={
                         'User-Agent': 'licensecrawl'
                     }
@@ -129,7 +130,6 @@ def gradle(path):
 
                 req = urllib.request.Request(
                     url,
-                    data=None,
                     headers={
                         'User-Agent': 'licensecrawl'
                     }
@@ -143,22 +143,29 @@ def gradle(path):
                 except Exception as e:
                     license=url
                 time.sleep(0.1)  # Avoid being rate-limited
-                print(path, package, license)
+                yield (path, package, license)
 
+import subprocess
 
 def npm(path):
-    pass
+    package_json = glob.glob(path + "/**/package.json", recursive=True)
+    for p in package_json:
+        for package in json.load(open(p)).get("dependencies", []):
+            out = subprocess.run(["npm", "show", package, "license"], capture_output=True)
+            yield(path, package, out.stdout.strip().decode())
 
-
+import itertools
 def licenses(path):
-    print("\n#", path)
-    python(path)
-    gradle(path)
-    gomod(path)
-    glide(path)
-    npm(path)
-    cocoa(path)
+    licenses = itertools.chain(*(f(path) for f in [
+    python,
+    gradle,
+    gomod,
+    glide,
+    npm,
+    cocoa]))
 
+    for l in licenses:
+        print(l)
 
 if len(sys.argv[1:]) == 0:
     for f in os.listdir("./"):
