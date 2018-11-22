@@ -1,3 +1,4 @@
+from pyquery import PyQuery as pq
 import os
 import urllib.error
 import urllib.request
@@ -5,7 +6,9 @@ import json
 import os.path
 import glob
 import sys
-import re 
+import re
+import time
+
 
 def python(path):
     requirements = glob.glob(path + "/**/requirements.txt", recursive=True)
@@ -30,9 +33,11 @@ def python(path):
             except urllib.error.HTTPError as e:
                 print(url, e)
 
+
 def github(repo_url):
     parts = repo_url.split("/")[1:]
-    url = ("http://api.github.com/repos/{}/{}/license?access_token={access_token}".format(*parts, access_token=os.environ["GITHUB_API_TOKEN"]))
+    url = ("http://api.github.com/repos/{}/{}/license?access_token={access_token}".format(*
+                                                                                          parts, access_token=os.environ["GITHUB_API_TOKEN"]))
     try:
         with urllib.request.urlopen(url) as url:
             data = json.loads(url.read().decode())
@@ -50,16 +55,18 @@ def gomod(path):
                 package = l.strip().split()[0]
                 license = github(package)
                 print(path, package, license)
-    
+
+
 def glide(path):
     glidefiles = glob.glob(path + "/**/glide.yaml", recursive=True)
     for g in glidefiles:
-        for l in open (g):
+        for l in open(g):
             if not "package:" in l:
                 continue
             package = l.split(":")[1].strip()
             license = github(package)
             print(path, package, license)
+
 
 def cocoa(path):
     podfiles = glob.glob(path + "/**/Podfile", recursive=True)
@@ -67,26 +74,23 @@ def cocoa(path):
         for l in open(p):
             if "pod" in l:
                 package = l.strip("").split()[1].strip(",\'")
-                url = "http://metrics.cocoapods.org/api/v1/pods/{}".format(package)
+                url = "http://metrics.cocoapods.org/api/v1/pods/{}".format(
+                    package)
                 req = urllib.request.Request(
-                    url, 
-                    data=None, 
+                    url,
+                    data=None,
                     headers={
-                    'User-Agent': 'licensecrawl'
+                        'User-Agent': 'licensecrawl'
                     }
                 )
 
                 try:
                     with urllib.request.urlopen(req) as response:
                         data = json.loads(response.read().decode())
-                        print(package, data["cocoadocs"]["license_short_name"]) 
+                        print(package, data["cocoadocs"]["license_short_name"])
                 except Exception as e:
                     print(e.reason)
 
-
-
-
-from pyquery import PyQuery as pq
 
 def gradle(path):
     gradles = glob.glob(path + "/**/build.gradle", recursive=True)
@@ -94,34 +98,57 @@ def gradle(path):
         for l in open(g):
             if l.strip().startswith("//"):
                 continue
-            if "implementation" in l:
+            if "compileSdkVersion" in l:
+                continue 
+            if "implementation" in l or "compile" in l:
                 # print(l)
+                print(l)
                 package = re.split("[( ]", l.strip())[1].strip("\'\)\"")
-                
+
                 if package == "fileTree":
                     continue
                 package = package.split("@")[0]
-                url = "https://mvnrepository.com/artifact/{}/{}/{}".format(*package.split(":"))
-                print(url)
+                try:
+                    url = "https://mvnrepository.com/artifact/{}/{}".format(
+                        *package.split(":"))
+                except Exception as e:
+                    print(package)
+                    continue
+
                 req = urllib.request.Request(
-                    url, 
-                    data=None, 
+                    url,
+                    data=None,
                     headers={
-                    'User-Agent': 'licensecrawl'
+                        'User-Agent': 'licensecrawl'
                     }
                 )
-                print(package)
-                res = urllib.request.urlopen(req)
-                print(package.split(":"))
-                print (url)
-                print(pq(res)('.version-section h2:contains("License")')) #TODO
-                sleep(1)
-                1/0
-    print(gradles)
-    pass
+                body = urllib.request.urlopen(req).read()
+                latest_version = pq(body)(".vbtn.release:first").text()
+
+                url = url+"/"+latest_version
+
+                req = urllib.request.Request(
+                    url,
+                    data=None,
+                    headers={
+                        'User-Agent': 'licensecrawl'
+                    }
+                )
+                body = urllib.request.urlopen(req).read()
+                try:
+                    license, license_url = (d.text for d in pq(body)(
+                        '.version-section h2:contains("Licenses")').nextAll()(
+                            "tbody tr td"
+                    ))
+                except Exception as e:
+                    license=url
+                time.sleep(0.1)  # Avoid being rate-limited
+                print(path, package, license)
+
 
 def npm(path):
     pass
+
 
 def licenses(path):
     print("\n#", path)
@@ -131,6 +158,7 @@ def licenses(path):
     glide(path)
     npm(path)
     cocoa(path)
+
 
 if len(sys.argv[1:]) == 0:
     for f in os.listdir("./"):
